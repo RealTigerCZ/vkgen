@@ -3,7 +3,7 @@
  * @author Jaroslav Hucel (xhucel00@vutbr.cz)
  * @brief
  * @date Created: 12. 11. 2025
- * @date Modified: 18. 04. 2026
+ * @date Modified: 10. 08. 2026
  *
  * @copyright Copyright (c) 2025 -> Public Domain, for more information see LICENSE
  */
@@ -1379,13 +1379,14 @@ void Generator::generate_handle(const Type& h, std::ofstream& file, TypeEnum& ob
     auto it = std::ranges::find(obj_enum.items, h.handle->objtypeenum, &TypeEnum::EnumItem::name);
     if (it == obj_enum.items.end())
         throw my_error{ std::format("Handle '{}' did not found matching objtypeenum '{}' in enum '{}'", h.name, h.handle->objtypeenum, obj_enum.name) };
-    auto enum_transformed = NameTranslator::transform_enum_name(obj_enum.name, false);
 
     if (!config.generate_handle_class)
         file << "VK_DEFINE_HANDLE(" << h.name << ")\n";
-    else
+    else {
+        // Use the same struct name as the non-vkg Vulkan APIs would use
         file << "using " << NameTranslator::from_type_name(h.name) << Deprecate{ h.deprecated } << "= "
-        << "Handle<struct " << NameTranslator::from_enum_value(h.handle->objtypeenum, enum_transformed, false) << "_T*>" << ";" << LineComment{ h.comment, false } << '\n';
+            << "Handle<struct " << h.name << "_T*>" << ";" << LineComment{ h.comment, false } << '\n';
+    }
 }
 
 // Generate error classes from Result enum values
