@@ -4,7 +4,7 @@
  * @brief Implementation of Arena allocator
  *
  * @date Created: 12. 10. 2025
- * @date Modified: 10. 04. 2026
+ * @date Modified: 10. 08. 2026
  *
  * @copyright Copyright (c) 2025 -> Public Domain, for more information see LICENSE
  */
@@ -12,6 +12,7 @@
 #include "arena.hpp"
 
 #include <cstring>
+#include <cstdint>
 
 using namespace vkgen;
 
