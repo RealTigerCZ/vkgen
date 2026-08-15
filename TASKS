@@ -109,3 +109,15 @@ TASK: 180426_07 xml::Dom recursive search semantics
  - getChildren / getChildrenByTag / getChildrenByAttr* have a `recursive` flag whose intended semantics are unresolved
  - Two candidate behaviors: (1) return every descendant matching the predicate, or (2) return first match along each branch
  - Several implementations are currently incomplete/non-returning; pick one and finish
+
+TASK: 150826_01 failure cleanup for pool-allocated array-create commands
+
+ - vkAllocateCommandBuffers / vkAllocateDescriptorSets are now classified as ResultCreateArray
+   (count read from the info struct, see Generator::detect_struct_member_count)
+ - ref/vkg.h:13075 frees the partially-allocated handles on a failed allocate:
+   vkFreeCommandBuffers(device, allocateInfo.commandPool, count, data) + memset of the array
+ - generate_wrapper_result_create_array emits no cleanup for them: the cleanup path uses the
+   vkDestroyXxx(parent, handle, allocator) shape, and pool-allocated handles have no
+   destroy_command at all (cache_handles matches the handle at parameters[1], which is the pool)
+ - Deliberate deviation from ref for now; to close it, teach HandleInfo about pool-free commands
+   (find the pool member in the allocate-info struct) and emit the vkFree*(parent, pool, n, data) form

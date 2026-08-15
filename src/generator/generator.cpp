@@ -3,7 +3,7 @@
  * @author Jaroslav Hucel (xhucel00@vutbr.cz)
  * @brief Vulkan registry data model and code generator implementation.
  * @date Created: 12. 11. 2025
- * @date Modified: 10. 08. 2026
+ * @date Modified: 15. 08. 2026
  *
  * @copyright Copyright (c) 2025 -> Public Domain, for more information see LICENSE
  */
@@ -1740,6 +1740,8 @@ CommandClassification Generator::classify_command(Command& cmd) {
                             }
                             cc.count_param_idx = cnt_idx;
                             cc.pattern = Pattern::ResultCreateArray;
+                        } else if (detect_struct_member_count(cmd, len, cc)) {
+                            cc.pattern = Pattern::ResultCreateArray;
                         }
                     }
                 } else {
@@ -1786,13 +1788,49 @@ CommandClassification Generator::classify_command(Command& cmd) {
         cmd.overloads |= Overloads::ThrowNoThrow;
         break;
 
-    case Pattern::ResultCreateArray: // Throw/NoThrow + always Unique; Singular when there's an input array pair.
-        cmd.overloads |= Overloads::ThrowNoThrow | Overloads::Unique;
-        if (cc.input_array_count > 0)
+    case Pattern::ResultCreateArray: // Throw/NoThrow; Unique is conditional on output_has_destroy — set later in generate().
+        // Singular when there's an input array pair or a struct-member count.
+        cmd.overloads |= Overloads::ThrowNoThrow;
+        if (cc.input_array_count > 0 || cc.count_struct_param_idx >= 0)
             cmd.overloads |= Overloads::Singular;
         break;
     }
     return cc;
+}
+
+// Detects a count living inside an info struct the command already takes, i.e. a len of the form
+// "pAllocateInfo->commandBufferCount" (vkAllocateCommandBuffers, vkAllocateDescriptorSets).
+// On success fills cc.count_struct_param_idx / cc.count_member and returns true.
+bool Generator::detect_struct_member_count(const Command& cmd, sv len, CommandClassification& cc) {
+    size_t arrow = len.find("->");
+    if (arrow == sv::npos) return false;
+
+    sv param_name = len.substr(0, arrow);
+    sv member_name = len.substr(arrow + 2);
+    if (param_name.empty() || member_name.empty()) return false;
+    if (member_name.find("->") != sv::npos) return false; // no nested chains
+
+    for (int i = 0; i < (int)cmd.parameters.size(); ++i) {
+        auto& p = cmd.parameters[i];
+        if (p.type_param.name != param_name) continue;
+        // Must be a const struct pointer, i.e. the info struct passed by reference in the wrapper
+        if (!p.type_param.is_const()) return false;
+        if (p.type_param.post_quals.empty()) return false;
+        if (!bool(p.type_param.post_quals[0] & TypeParam::PostQualifier::Pointer)) return false;
+
+        auto it = types.find(p.type_param.type);
+        if (it == types.end() || it->second.category != Type::Category::Struct) return false;
+
+        for (const auto& m : it->second.struct_->members) {
+            if (m.type_param.name != member_name) continue;
+            if (m.type_param.type != "uint32_t" || !m.type_param.post_quals.empty()) return false;
+            cc.count_struct_param_idx = i;
+            cc.count_member = member_name;
+            return true;
+        }
+        return false;
+    }
+    return false;
 }
 
 // Detects 1:1 input array pairs: non-pointer uint32_t count + const T* with len referencing it.
@@ -2177,16 +2215,19 @@ void Generator::generate_wrapper_result_create(const Command& cmd, const Command
     }
 }
 
-// Pattern 3b: VkResult → creates N handles into output array sharing a count param.
+// Pattern 3b: VkResult → creates N handles into an output array.
 // Emits vector<T> and vector<UniqueT> wrappers (throw/noThrow/default gated), plus
-// singular convenience overloads (createGraphicsPipelines → createGraphicsPipeline) when the
-// command has an input array of create-infos. Input array is rendered as `const span<T>`
-// (plural) or `const T&` (singular); count param is dropped.
+// singular convenience overloads (createGraphicsPipelines → createGraphicsPipeline).
+// Two count shapes are handled:
+//  - count param (vkCreateGraphicsPipelines): count is dropped from the signature, the paired
+//    input array is rendered as `const span<T>` (plural) / `const T&` (singular).
+//  - count member (vkAllocateCommandBuffers, len="pAllocateInfo->commandBufferCount"): the info
+//    struct stays in the signature unchanged, the singular overload guards on the member being 1.
 void Generator::generate_wrapper_result_create_array(const Command& cmd, const CommandClassification& cc, std::ofstream& file) {
     using OM = WrapperEmitOptions::OutputMode;
     using AM = WrapperEmitOptions::ArrayMode;
     assert(cc.pattern == CommandClassification::Pattern::ResultCreateArray);
-    assert(cc.output_param_idx >= 0 && cc.count_param_idx >= 0);
+    assert(cc.output_param_idx >= 0 && (cc.count_param_idx >= 0 || cc.count_struct_param_idx >= 0));
 
     const auto [unique_name, name] = NameTranslator::unique_command_name(cmd.name);
     auto& out_param = cmd.parameters[cc.output_param_idx];
@@ -2198,7 +2239,10 @@ void Generator::generate_wrapper_result_create_array(const Command& cmd, const C
     std::string out_name(out_param.type_param.name);
 
     std::string size_expr;
-    if (cc.input_array_count > 0) {
+    if (cc.count_struct_param_idx >= 0) {
+        size_expr = std::string(cmd.parameters[cc.count_struct_param_idx].type_param.name)
+            + "." + std::string(cc.count_member);
+    } else if (cc.input_array_count > 0) {
         auto& arr_param = cmd.parameters[cc.input_arrays[0].array_idx];
         size_expr = std::string(NameTranslator::from_input_array_name(arr_param.type_param.name).new_name) + ".size()";
     } else {
@@ -2287,7 +2331,9 @@ void Generator::generate_wrapper_result_create_array(const Command& cmd, const C
     }
 
     // ---- vector<UniqueT> ----
-    {
+    // Pool-allocated handles (CommandBuffer, DescriptorSet) have no destroy() overload and hence no
+    // UniqueHandle specialization — emitting the Unique variants for them would not compile.
+    if (cc.output_has_destroy) {
         std::string ret = "vector<" + unique_type + ">";
         std::string trailing = "vector<" + unique_type + ">& " + out_name;
         Variant v{
@@ -2323,17 +2369,37 @@ void Generator::generate_wrapper_result_create_array(const Command& cmd, const C
     }
 
     // ---- Singular convenience overloads ----
-    if (cc.input_array_count == 0) return;
     std::string singular_name = NameTranslator::singularize(name);
     if (singular_name == name) return;
+
+    // The two count shapes differ in how the singular signature is formed:
+    //  - count param: the input array collapses from `const span<T>` to `const T&`
+    //  - count member: the signature is unchanged, so the _throw body has to guard at runtime on
+    //    the count member being 1 (nothing in the signature can enforce it)
+    AM singular_array_mode = AM::Span;
+    std::string singular_param_name;
+    // Split around the function name so the emitted message can carry the _throw suffix
+    std::string singular_guard_head, singular_guard_tail;
+    if (cc.count_struct_param_idx >= 0) {
+        auto& info_param = cmd.parameters[cc.count_struct_param_idx];
+        sv info_type = info_param.type_param.type;
+        if (info_type.starts_with("Vk")) info_type.remove_prefix(2);
+        singular_guard_head = "if (" + size_expr + " != 1) throw OutOfHostMemoryError(\"" + singular_name;
+        singular_guard_tail = "(): " + std::string(info_type) + "::" + std::string(cc.count_member)
+            + " must be 1.\"); ";
+    } else if (cc.input_array_count > 0) {
+        singular_array_mode = AM::Singular;
+        auto& arr_param = cmd.parameters[cc.input_arrays[0].array_idx];
+        singular_param_name = NameTranslator::singularize(
+            NameTranslator::from_input_array_name(arr_param.type_param.name).new_name);
+    } else {
+        return;
+    }
 
     sv singular_stem = singular_name;
     Extension singular_ext = NameTranslator::get_and_remove_extension_name(singular_stem);
     std::string singular_unique_name = std::string(singular_stem) + "Unique"
         + (singular_ext != Extension::None ? std::string(to_string(singular_ext)) : "");
-    auto& arr_param = cmd.parameters[cc.input_arrays[0].array_idx];
-    std::string singular_param_name = NameTranslator::singularize(
-        NameTranslator::from_input_array_name(arr_param.type_param.name).new_name);
     std::string out_ref_name = NameTranslator::singularize(
         NameTranslator::from_input_array_name(out_name).new_name);
     std::string singular_out_expr = "reinterpret_cast<" + out_type + "::HandleType*>(&" + out_ref_name + ")";
@@ -2347,7 +2413,7 @@ void Generator::generate_wrapper_result_create_array(const Command& cmd, const C
             .trailing_decl = trailing,
             .trailing_name = out_ref_name,
             .call_output_expr = singular_out_expr, // only used in the noThrow body; throw uses default "&h"
-            .array_mode = AM::Singular,
+            .array_mode = singular_array_mode,
             .singular = singular_param_name,
         };
         if (should_emit_throw()) {
@@ -2355,10 +2421,16 @@ void Generator::generate_wrapper_result_create_array(const Command& cmd, const C
             file << "inline " << v.return_throw << " " << v.fn_name << suffix;
             generate_wrapper_params(cmd, cc, file,
                 WrapperEmitOptions{ .array = v.array_mode, .singular_param_name = v.singular });
-            file << " { " << v.return_throw << "::HandleType h; Result r = funcs." << cmd.name;
+            file << " { ";
+            if (!singular_guard_head.empty())
+                file << singular_guard_head << suffix << singular_guard_tail;
+            file << v.return_throw << "::HandleType h; Result r = funcs." << cmd.name;
             generate_call_args(cmd, cc, file,
                 WrapperEmitOptions{ .array = v.array_mode, .singular_param_name = v.singular });
-            file << "; detail::processResult(r, h, \"" << cmd.name << "\"); return h; }\n";
+            if (cc.output_has_destroy)
+                file << "; detail::processResult(r, h, \"" << cmd.name << "\"); return h; }\n";
+            else
+                file << "; checkForSuccessValue(r, \"" << cmd.name << "\"); return h; }\n";
         }
         if (should_emit_nothrow()) {
             sv suffix = should_emit_default() ? "_noThrow" : "";
@@ -2375,7 +2447,7 @@ void Generator::generate_wrapper_result_create_array(const Command& cmd, const C
     }
 
     // ---- Singular UniqueT ----
-    {
+    if (cc.output_has_destroy) {
         std::string trailing = unique_type + "& " + out_ref_name;
         Variant v{
             .fn_name = singular_unique_name,
@@ -2383,7 +2455,7 @@ void Generator::generate_wrapper_result_create_array(const Command& cmd, const C
             .trailing_decl = trailing,
             .trailing_name = out_ref_name,
             .call_output_expr = singular_out_expr,
-            .array_mode = AM::Singular,
+            .array_mode = singular_array_mode,
             .singular = singular_param_name,
         };
         if (should_emit_throw()) {
@@ -3913,8 +3985,8 @@ void Generator::generate(xml::Dom& dom, std::ofstream& header, std::ofstream& so
                     break;
                 }
             }
-            // ResultCreate emits Unique only when the handle is destroyable; record it.
-            if (cc.pattern == CommandClassification::Pattern::ResultCreate && cc.output_has_destroy)
+            // Both create patterns emit Unique only when the handle is destroyable; record it.
+            if (cc.output_has_destroy)
                 cmd->overloads |= Overloads::Unique;
         }
         switch (cc.pattern) {
@@ -4027,9 +4099,11 @@ void Generator::generate(xml::Dom& dom, std::ofstream& header, std::ofstream& so
                 break;
             case Pattern::ResultCreateArray: {
                     emit_throw_nothrow_default(alias_base, target_base);
-                    emit_throw_nothrow_default(alias_unique, target_unique);
+                    // Pool-allocated handles have no UniqueHandle, so no Unique wrappers to alias
+                    if (cc.output_has_destroy)
+                        emit_throw_nothrow_default(alias_unique, target_unique);
                     // Singular convenience overloads: createGraphicsPipelines -> createGraphicsPipeline
-                    if (cc.input_array_count > 0) {
+                    if (cc.input_array_count > 0 || cc.count_struct_param_idx >= 0) {
                         const auto singular_names = [](sv alias_base) {
                             std::string singular_name = NameTranslator::singularize(alias_base);
                             sv singular_stem = singular_name;
@@ -4042,7 +4116,8 @@ void Generator::generate(xml::Dom& dom, std::ofstream& header, std::ofstream& so
                         auto [singular_alias_unique, singular_alias] = singular_names(alias_base);
                         auto [singular_target_unique, singular_target] = singular_names(target_base);
                         emit_throw_nothrow_default(singular_alias, singular_target);
-                        emit_throw_nothrow_default(singular_alias_unique, singular_target_unique);
+                        if (cc.output_has_destroy)
+                            emit_throw_nothrow_default(singular_alias_unique, singular_target_unique);
                     }
                     break;
                 }
