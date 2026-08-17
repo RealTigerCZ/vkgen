@@ -2396,10 +2396,7 @@ void Generator::generate_wrapper_result_create_array(const Command& cmd, const C
         return;
     }
 
-    sv singular_stem = singular_name;
-    Extension singular_ext = NameTranslator::get_and_remove_extension_name(singular_stem);
-    std::string singular_unique_name = std::string(singular_stem) + "Unique"
-        + (singular_ext != Extension::None ? std::string(to_string(singular_ext)) : "");
+    std::string singular_unique_name = singular_name + "Unique";
     std::string out_ref_name = NameTranslator::singularize(
         NameTranslator::from_input_array_name(out_name).new_name);
     std::string singular_out_expr = "reinterpret_cast<" + out_type + "::HandleType*>(&" + out_ref_name + ")";
@@ -3508,13 +3505,8 @@ void vkgen::Generator::Generator::generate_modules(std::ofstream& modules, const
             if (has(ov, Overloads::Singular)) {
                 std::string singular = NameTranslator::singularize(base_name);
                 emit_set(singular);
-                if (has(ov, Overloads::Unique)) {
-                    sv stem = singular;
-                    Extension ext = NameTranslator::get_and_remove_extension_name(stem);
-                    std::string singular_unique = std::string(stem) + "Unique"
-                        + (ext != Extension::None ? std::string(to_string(ext)) : "");
-                    emit_set(singular_unique);
-                }
+                if (has(ov, Overloads::Unique))
+                    emit_set(singular + "Unique");
             }
             };
 
@@ -4106,10 +4098,7 @@ void Generator::generate(xml::Dom& dom, std::ofstream& header, std::ofstream& so
                     if (cc.input_array_count > 0 || cc.count_struct_param_idx >= 0) {
                         const auto singular_names = [](sv alias_base) {
                             std::string singular_name = NameTranslator::singularize(alias_base);
-                            sv singular_stem = singular_name;
-                            Extension singular_ext = NameTranslator::get_and_remove_extension_name(singular_stem);
-                            std::string singular_unique_name = std::string(singular_stem) + "Unique"
-                                + (singular_ext != Extension::None ? std::string(to_string(singular_ext)) : "");
+                            std::string singular_unique_name = singular_name + "Unique";
                             return std::make_pair(std::move(singular_unique_name), std::move(singular_name));
                             };
 
@@ -4576,13 +4565,10 @@ std::pair<std::string, std::string> vkgen::Generator::NameTranslator::unique_com
     std::string not_unique_name(name.substr(2));
     assert(!not_unique_name.empty());
     not_unique_name[0] = std::tolower(not_unique_name[0]);
-    name = not_unique_name;
 
-    Extension ext = get_and_remove_extension_name(name);
-    std::string unique_name(name);
-    unique_name.append("Unique");
-    if (ext != Extension::None)
-        unique_name.append(to_string(ext));
+    // Unique is a variant marker, so it goes last — after any extension suffix, matching
+    // Vulkan-Hpp (createSwapchainKHRUnique) and the _throw/_noThrow markers.
+    std::string unique_name = not_unique_name + "Unique";
 
     return std::make_pair(std::move(unique_name), std::move(not_unique_name));
 }

@@ -665,7 +665,8 @@ namespace vkgen::Generator {
         static NameTranslator from_constexpr_value(std::string_view value_name);
         static NameTranslator from_command_name(std::string_view name); // vkCreateBuffer -> createBuffer
         static NameTranslator from_input_array_name(std::string_view name); // pViewports -> viewports
-        static std::pair<std::string, std::string> unique_command_name(std::string_view name); // vkCreateBuffer -> createBufferUnique, createBuffer
+        // vkCreateBuffer -> createBufferUnique, createBuffer; vkCreateSwapchainKHR -> createSwapchainKHRUnique, createSwapchainKHR
+        static std::pair<std::string, std::string> unique_command_name(std::string_view name);
         // Returns the singular form, preserving any trailing all-uppercase extension suffix
         static std::string singularize(std::string_view name);
 
