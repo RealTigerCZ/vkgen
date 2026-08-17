@@ -3,7 +3,7 @@
  * @author Jaroslav Hucel (xhucel00@vutbr.cz)
  * @brief Pregenerated boilerplate code for the generator.
  * @date Created: 23. 03. 2026
- * @date Modified: 28. 04. 2026
+ * @date Modified: 17. 08. 2026
  *
  * @copyright Copyright (c) 2025 -> Public Domain, for more information see LICENSE
  */
@@ -157,15 +157,27 @@ namespace boilerplate {
         "    uint32_t _size;\n\n"sv,
 
         "public:\n"sv,
-        "    constexpr span(const Type* data, size_t size) : _data(data), _size(size) {}\n"sv,
-        "    constexpr span(const Type& data) : _data(&data), _size(1) {}\n"sv,
-        "    constexpr span(const vector<Type>& data) : _data(data.data()), _size(data.size()) {}\n\n"sv,
+        "    constexpr span(const Type* data, size_t size) : _data(data), _size(uint32_t(size)) {}\n"sv,
+        "    constexpr span(const Type& data) : _data(&data), _size(1) {}\n\n"sv,
+
+        "    // Any contiguous container of Type: vk::vector, std::array, std::vector, std::span, ...\n"sv,
+        "    // The span does not own the data, so the container must outlive it\n"sv,
+        "    template<typename Container>\n"sv,
+        "        requires requires(const Container& c) {\n"sv,
+        "            static_cast<const Type*>(c.data());\n"sv,
+        "            static_cast<size_t>(c.size());\n"sv,
+        "        }\n"sv,
+        "    constexpr span(const Container& data) noexcept : _data(data.data()), _size(uint32_t(data.size())) {}\n\n"sv,
 
         "    // If Type is handle, add UniqueHandle overloads\n"sv,
         "    template <typename U = Type, typename = detail::enable_if_t<detail::is_handle<U>::value>>\n"sv,
         "    constexpr span(const UniqueHandle<U>& data) noexcept : _data(reinterpret_cast<const Type*>(&data)), _size(1) {}\n"sv,
-        "    template <typename U = Type, typename = detail::enable_if_t<detail::is_handle<U>::value>>\n"sv,
-        "    constexpr span(const vector<UniqueHandle<U>>& data) noexcept : _data(reinterpret_cast<const Type*>(data.data())), _size(data.size()) {}\n\n"sv,
+        "    template <typename U = Type, typename Container>\n"sv,
+        "        requires detail::is_handle<U>::value && requires(const Container& c) {\n"sv,
+        "            static_cast<const UniqueHandle<U>*>(c.data());\n"sv,
+        "            static_cast<size_t>(c.size());\n"sv,
+        "        }\n"sv,
+        "    constexpr span(const Container& data) noexcept : _data(reinterpret_cast<const Type*>(data.data())), _size(uint32_t(data.size())) {}\n\n"sv,
 
         "    const typename detail::native_type<Type>::type* data() const noexcept {\n"sv,
         "        return reinterpret_cast<const typename detail::native_type<Type>::type*>(_data);\n"sv,

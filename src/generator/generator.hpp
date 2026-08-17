@@ -3,7 +3,7 @@
  * @author Jaroslav Hucel (xhucel00@vutbr.cz)
  * @brief Vulkan registry data model and code generator driver.
  * @date Created: 02. 11. 2025
- * @date Modified: 05. 05. 2026
+ * @date Modified: 15. 08. 2026
  *
  * @copyright Copyright (c) 2025 -> Public Domain, for more information see LICENSE
  */
@@ -461,7 +461,7 @@ namespace vkgen::Generator {
             Void,              // void return, no error checking
             ResultVoid,        // VkResult return, no output data
             ResultCreate,      // VkResult return, creates handle via out-param
-            ResultCreateArray, // VkResult return, creates N handles; output array's len references a uint32_t count param
+            ResultCreateArray, // VkResult return, creates N handles; output array's len references a uint32_t count param or a count member of a const struct param
             VoidOutParam,      // void return, fills struct via out-param
             Enumerate,         // two-call enumerate pattern
             ResultOutParam,    // VkResult + non-handle out-param
@@ -476,6 +476,12 @@ namespace vkgen::Generator {
         int count_param_idx = -1;         // for enumerate
         int array_param_idx = -1;         // for enumerate
         bool output_has_destroy = false;  // ResultCreate: output handle has destroy() overload
+
+        // ResultCreateArray with a struct-member count (len="pAllocateInfo->commandBufferCount").
+        // Mutually exclusive with count_param_idx: there is no count parameter to drop from the
+        // wrapper signature, the count is read from the info struct the caller already passes in.
+        int count_struct_param_idx = -1;  // const struct param owning the count member
+        std::string_view count_member;    // member name, e.g. "commandBufferCount"
 
         // Input array pairs: non-pointer uint32_t count + const T* with len referencing it (1:1 only)
         static constexpr int max_input_arrays = 8;
@@ -659,7 +665,8 @@ namespace vkgen::Generator {
         static NameTranslator from_constexpr_value(std::string_view value_name);
         static NameTranslator from_command_name(std::string_view name); // vkCreateBuffer -> createBuffer
         static NameTranslator from_input_array_name(std::string_view name); // pViewports -> viewports
-        static std::pair<std::string, std::string> unique_command_name(std::string_view name); // vkCreateBuffer -> createBufferUnique, createBuffer
+        // vkCreateBuffer -> createBufferUnique, createBuffer; vkCreateSwapchainKHR -> createSwapchainKHRUnique, createSwapchainKHR
+        static std::pair<std::string, std::string> unique_command_name(std::string_view name);
         // Returns the singular form, preserving any trailing all-uppercase extension suffix
         static std::string singularize(std::string_view name);
 
@@ -751,6 +758,7 @@ namespace vkgen::Generator {
 
         CommandClassification classify_command(Command& cmd);
         void detect_input_arrays(const Command& cmd, CommandClassification& cc);
+        bool detect_struct_member_count(const Command& cmd, std::string_view len, CommandClassification& cc);
         bool has_pnext(std::string_view struct_type_name);
 
         bool should_emit_throw() const;
