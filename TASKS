@@ -121,3 +121,9 @@ TASK: 150826_01 failure cleanup for pool-allocated array-create commands
    destroy_command at all (cache_handles matches the handle at parameters[1], which is the pool)
  - Deliberate deviation from ref for now; to close it, teach HandleInfo about pool-free commands
    (find the pool member in the allocate-info struct) and emit the vkFree*(parent, pool, n, data) form
+
+TASK: 170826_01 initializer_list constructor for span
+
+ - span now takes any container with .data()/.size(), but the braced form waitForFences({f1, f2}, ...)
+   still needs "span(std::initializer_list<Type>)" and thus a new <initializer_list> include
+ - Discuss the new include, or put it behind config flag; note the elements are copied, so it cannot carry UniqueHandle

@@ -90,7 +90,7 @@ else()
     # This works for both GCC (GNU) and Clang
     add_custom_target(vkg_comp
         COMMAND ${CMAKE_CXX_COMPILER} -c ${CMAKE_BINARY_DIR}/vkg.cpp -o ${CMAKE_BINARY_DIR}/vk.o -std=c++20 -Wall -Wextra -g -pedantic -fdiagnostics-color=always
-        COMMAND ${CMAKE_CXX_COMPILER} ${CMAKE_BINARY_DIR}/vkg_comp.cpp -g ${CMAKE_BINARY_DIR}/vk.o -o ${CMAKE_BINARY_DIR}/vkg_comp
+        COMMAND ${CMAKE_CXX_COMPILER} ${CMAKE_BINARY_DIR}/vkg_comp.cpp -g ${CMAKE_BINARY_DIR}/vk.o -o ${CMAKE_BINARY_DIR}/vkg_comp -std=c++20 -fdiagnostics-color=always
         COMMAND echo "" && echo "Successfully compiled test file 'vkg_comp.cpp' with ${CMAKE_CXX_COMPILER_ID}!"
         COMMENT "Compiling vkg.hpp manually with ${CMAKE_CXX_COMPILER_ID} to check if it compiles"
         )
